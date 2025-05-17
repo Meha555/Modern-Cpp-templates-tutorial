@@ -6,7 +6,7 @@
 -->
 ### 题目
 
-```c++
+```cpp
 template<class ...Args>
 auto Reverse(Args&&... args) {
     std::vector<std::common_type_t<Args...>> res{};

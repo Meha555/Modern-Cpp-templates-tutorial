@@ -2,7 +2,7 @@ mq卢瑟的作业如下：
 
 首先作业题目是： 
 
-```c++
+```cpp
 // 说出以下代码使用的折叠表达式语法，以及它的效果，详细解析，使用 Markdown 语法。
 template<class ...Args>
 auto Reverse(Args&&... args) {
@@ -15,7 +15,7 @@ auto Reverse(Args&&... args) {
 
 假设 main 函数按照下面方式调用 Reverse 函数： 
 
-```c++
+```cpp
 auto arr = Reverse(1.1, 3);
 ```
 ---
@@ -33,7 +33,7 @@ auto arr = Reverse(1.1, 3);
 
 实例化展开后是这样： 
 
-```c++
+```cpp
 std::vector<double> Reverse(double && args0, int && args1)
 {
 	std::vector<double> res = std::vector<double>{};

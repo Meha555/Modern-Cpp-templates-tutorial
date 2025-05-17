@@ -1,6 +1,6 @@
 # SFINAE
 
-“代换失败不是错误” (Substitution Failure Is Not An Error)
+“代换失败不是错误” (Substitution Failure Is Not An Error, SFINAE)
 
 在**函数模板的重载决议**[^1]中会应用此规则：当模板形参在替换成显式指定的类型或推导出的类型失败时，从重载集中丢弃这个特化，*而非导致编译失败*。
 
@@ -8,31 +8,23 @@
 
 > 注意：**本节非常非常的重要，是模板基础中的基础，最为基本的特性和概念**。
 
-## 解释
+## 模板形参的两次代换
 
-对函数模板形参进行两次代换（由模板实参所替代）：
+对模板形参进行两次代换（由模板实参所替代）：
 
-- 在模板实参推导前，对显式指定的模板实参进行代换
+- 在模板实参推导前，对显式指定的模板实参进行代换【就是显式实例化或者偏特化】
 
-- 在模板实参推导后，对推导出的实参和从默认项获得的实参进行替换
+- 在模板实参推导后，对推导出的实参和从默认项获得的实参进行替换【就是剩余的模板形参】
 
 代换的实参写出时非良构[^2]（并带有必要的诊断）的任何场合，都是*代换失败*。
 
-> ”对显式指定的模板实参进行代换“这里的显式指定，就比如 `f<int>()` 就是显式指明了。我知道你肯定有疑问：我都显式指明了，那下面还推导啥？对，如果模板函数 `f` 只有一个模板形参，而你显式指明了，的确第二次代换没用，因为根本没啥好推导的。
-
-> 两次代换都有作用，是在于有多个模板形参，显式指定一些，又根据传入参数推导一些。
-
 ## 代换失败与硬错误
 
-> **只有在函数类型或其模板形参类型或其 explicit 说明符 (C++20 起)的*立即语境*中的类型与表达式中的失败，才是 *SFINAE 错误*。如果对代换后的类型/表达式的*求值导致副作用*，例如实例化某模板特化、生成某隐式定义的成员函数等，那么这些副作用中的错误都被当做*硬错误***。
+**SFINAE 代换失败**：在 函数类型 或其 模板形参类型 或其 `explicit` 说明符 (C++20 起)的*立即语境*中的类型与表达式中的失败。
 
-> 代换失败就是指 SFINAE 错误。
-
-以上概念中注意关键词“SFINAE 错误”、“硬错误”，这些解释不用在意，先看完以下示例再去看概念理解。
+**硬错误**：在 代换后的类型/表达式 的*求值导致副作用（例如实例化某模板、生成某隐式定义的成员函数等）*，在这些副作用中如果产生了错误，则称作硬错误。
 
 ```cpp
-#include <iostream>
-
 template<typename A>
 struct B { using type = typename A::type; }; // 待决名，C++20 之前必须使用 typename 消除歧义
 
@@ -49,11 +41,10 @@ int main(){
     struct C { using type = int; };
 
     foo<B<C>>(1);       // void foo(int)    输出: SFINAE T::type B<T>::type
+    foo<B<C>>(1.1);     // void foo(double) 输出: SFINAE T
     foo<void>(1);       // void foo(double) 输出: SFINAE T
 }
 ```
-
-全平台[测试通过](https://godbolt.org/z/88bPesedP)。
 
 以上的示例很好的向我们展示了 SFINAE 的作用，可以影响重载决议。
 
@@ -72,7 +63,7 @@ template<
 
 > 代换的实参写出时非良构（并带有必要的诊断）的任何场合，都是代换失败。
 
-所以这是一个代换失败，但是因为“*代换失败不是错误*”，只是从“*重载集中丢弃这个特化，而不会导致编译失败*”，然后就就去尝试匹配 `void foo(double)` 了，`1` 是 int 类型，隐式转换到 double，没什么问题。
+所以这是一个代换失败，但是因为“*代换失败不是错误*”，只是从“*重载集中丢弃这个特化，而不会导致编译失败*”，然后就就去尝试匹配下一个版本 `void foo(double)` 了，`1` 是 int 类型，隐式转换到 double，没什么问题。
 
 至于其中提到的*硬错误*？为啥它是硬错误？其实最开始的概念已经说了：
 
@@ -82,19 +73,9 @@ template<
 
 > 注意，你应当关注 `B<T>` 而非 `B<T>::type`，因为是直接在实例化模板 B 的时候就失败了，被当成硬错误；如果 `B<T>` 实例化成功，而没有 `::type`，则被当成**代换失败**（不过这里是不可能）。
 
----
-
-这节内容非常重要，提到的概念和代码需要全部掌握，后面的内容其实无非都是以本节为基础的变种、各种使用示例、利用标准库的设施让写法简单一点，但是根本的原理，就是本节讲的。
-
 ## 基础使用示例
 
-*请在完全读懂上一节内容再阅读本节内容*。
-
-C++ 的模板，很多时候就像拼图一样，我们带入进去想，很多问题即使没有阅读规则，也可以无师自通，猜出来。
-
----
-
-> ***我需要写一个函数模板 `add`，想要要求传入的对象必须是支持 `operator+` 的，应该怎么写？***
+我需要写一个函数模板 `add`，想要要求传入的对象必须是支持 `operator+` 的，应该怎么写？
 
 利用 SFINAE 我们能轻松完成这个需求。
 
@@ -113,11 +94,13 @@ auto add(const T& t1, const T& t2) -> decltype(t1 + t2){   // C++11 后置返回
 
 这两个问题其实是一个问题，本质上就是还是不够懂 SFINAE 或者说模板：
 
-- 如果就是简单写一个 `add` 函数模板不使用 SFINAE，那么编译器在编译的时候，会尝试模板实例化，生成函数定义，发现你这类型根本没有 `operator+`，于是实例化模板错误。
+- 如果就是简单写一个 `add` 函数模板不使用 SFINAE，那么编译器在编译的时候，会尝试模板实例化来生成函数定义，结果发现你这类型根本没有 `operator+`，于是实例化模板错误。
 
 - 如果按照我们上面的写法使用 SFINAE，根据“*代换失败不是错误*”的规则，从重载集中丢弃这个特化 `add`，然而又没有其他的 `add` 重载，所以这里的错误是“**未找到匹配的重载函数**”。
 
-这里的重点是什么？**是模板实例化，能不要实例化就不要实例化**，我们当前的示例只是因为 `add` 函数模板非常的简单，即使实例化错误，编译器依然可以很轻松的报错告诉你，是因为没有 `operator+`。但是很多模板是非常复杂的，编译器实例化模板经常会产生一些完全不可读的报错；如果我们使用 SFINAE，编译器就是直接告诉我：“未找到匹配的重载函数”，我们自然知道就是传入的参数没有满足要求。而且实例化模板也是有开销的，很多时候甚至很大。
+这里的重点是**能不要实例化就不要实例化，因为模板实例化会拖慢编译时间**。
+
+我们当前的示例的 `add` 函数模板非常的简单，虽然编译器可以用到 `operator+()` 的 `return t1 + t2` 这句报错告诉你是因为没有 `operator+` ，但是很多模板是非常复杂的，编译器实例化模板经常会产生一些完全不可读的报错；如果我们使用 SFINAE，编译器就是直接告诉我：“未找到匹配的重载函数”，而根本没有进行模板实例化，那我们就看 SFINAE 中哪些 Traits 没有满足即可，通常只需要按顺序一个个排查就行。
 
 总而言之：
 **即使不为了处理重载，使用 SFINAE 约束函数模板的传入类型，也是有很大好处的：报错、编译速度**。
@@ -130,6 +113,8 @@ auto add(const T& t1, const T& t2) -> decltype(t1 + t2){   // C++11 后置返回
 
 ### `std::enable_if`
 
+可能的实现：
+
 ```cpp
 template<bool B, class T = void>
 struct enable_if {};
@@ -141,7 +126,7 @@ template< bool B, class T = void >
 using enable_if_t = typename enable_if<B,T>::type; // C++14 引入
 ```
 
-这是一个模板类，在 C++11 引入，它的用法很简单，就是第一个模板参数为 true，此模板类就有 `type`，不然就没有，以此进行 SFINAE。
+这是一个模板类，在 C++11 引入，它的用法很简单，就是第一个模板参数为 true，此模板类就有 `type = T`，不然就没有，以此进行 SFINAE。
 
 ```cpp
 template<typename T,typename SFINAE = 
@@ -161,7 +146,7 @@ using enable_if_t = typename enable_if<false,void>::type; // void 是默认模�
 
 - **enable_if 如果第一个模板参数为 `false`，它根本没有 `type` 成员**。
 
-所以这里是个**代换失败**，但是因为“*代换失败不是错误*”，所以只是不选择函数模板 `f`，而不会导致编译错误。
+所以这里是个**代换失败**，但是因为“*代换失败不是错误*”，所以不会导致编译错误，只是不选择函数模板 `f` 而继续选择其他的模板。
 
 ---
 
@@ -201,11 +186,11 @@ array(Type, Args...) -> array<std::enable_if_t<(std::is_same_v<Type, Args> && ..
 
 以上示例，是显式指明了 `std::enable_if` 的第二个模板实参，为 `Type`。
 
-它是我们[类模板](02类模板.md)推导指引那一节的示例的**改进版本**，我们使用 std::enable_if_t 与 C++17 折叠表达式，为它增加了约束，这几乎和 [libstdc++](https://github.com/gcc-mirror/gcc/blob/7a01cc711f33530436712a5bfd18f8457a68ea1f/libstdc%2B%2B-v3/include/std/array#L292-L295) 中的代码一样。
+它是我们[类模板](02类模板.md)推导指引那一节的示例的**改进版本**，我们使用 `std::enable_if_t` 与 C++17 折叠表达式，为它增加了约束，这几乎和 [libstdc++](https://github.com/gcc-mirror/gcc/blob/7a01cc711f33530436712a5bfd18f8457a68ea1f/libstdc%2B%2B-v3/include/std/array#L292-L295) 中的代码一样。
 
 `(std::is_same_v<Type, Args> && ...)` 做 std::enable_if 的第一个模板实参，这里是一个一元右折叠，使用了 **`&&`** 运算符，也就是必须 std::is_same_v 全部为 true，才会是 true。简单的说就是要求类型形参包 Args 中的每一个类型全部都是一样的，不然就是替换失败。
 
-这样做有很多好处，老式写法存在很多问题：
+这样做有很多好处，如果不使用 SFINAE 约束，那么 array 的类型完全取决于第一个参数的类型，很容易导致其他问题：
 
 ```cpp
 template<class Ty, std::size_t size>
@@ -220,13 +205,11 @@ array(T t, Args...) -> array<T, sizeof...(Args) + 1>;
 ::array arr2{1, 2.3, 3.4, 4.5, 5.6}; // 被推导为 array<int,5>    有数据截断
 ```
 
-如果不使用 SFINAE 约束，那么 array 的类型完全取决于第一个参数的类型，很容易导致其他问题。
-
 ### `std::void_t`
 
 ```cpp
 template< class... >
-using void_t = void;
+using void_t = void; // C++17起
 ```
 
 如你所见，它的实现非常非常的简单，就是一个别名，接受任意个数的类型参数，但自身始终是 `void` 类型。
@@ -237,15 +220,15 @@ using void_t = void;
 
 ---
 
-> *我要写一个函数模板 `add`，我要求传入的对象需要支持 `+` 以及它需要有别名 `type` ，成员 `value`、`f`*。
+*我要写一个函数模板 `add`，我要求传入的对象需要支持 `+` 以及它需要有别名 `type` ，成员 `value`、`f`*。
 
 ```cpp
-#include <iostream>
-#include <type_traits>
-
 template<typename T,
     typename SFINAE = std::void_t<
-    decltype(T{} + T{}), typename T::type, decltype(&T::value), decltype(&T::f) >>
+    decltype(T{} + T{}), // 要求有T::operator+(T)
+    typename T::type,    // 要求有T::type
+    decltype(&T::value), // 要求有T::value
+    decltype(&T::f) >>   // 要求有T::f
 auto add(const T& t1, const T& t2) {
     std::puts("SFINAE + | typename T::type | T::value");
     return t1 + t2;
@@ -260,14 +243,12 @@ struct Test {
     int value;
 };
 
-int main() {
-    Test t{ 1 }, t2{ 2 };
-    add(t, t2);  // OK
-    //add(1, 2); // 未找到匹配的重载函数
-}
+Test t{ 1 }, t2{ 2 };
+add(t, t2);  // OK
+//add(1, 2); // 未找到匹配的重载函数
 ```
 
-- `decltype(T{} + T{})` 用 decltype 套起来只是为了获得类型符合语法罢了，std::void_t 只接受类型参数。如果类型没有 `operator+`，自然是*代换失败*。
+- `decltype(T{} + T{})` 用 decltype 套起来只是为了获得类型符合语法罢了，`std::void_t` 只接受类型参数。如果类型没有 `operator+`，自然是*代换失败*。
 
 - `typename T::type` 使用 `typename` 是因为[待决名](09待决名.md)；type 本身是类型，不需要 decltype。如果 `add` 推导的类型没有 `type` 别名，自然是*代换失败*。
 
@@ -279,17 +260,18 @@ int main() {
 
 > 那么这里 `std::void_t` 的作用是？
 
-其实倒也没啥，无非就是给了个好的语境，让我们能这样写，最终 `typename SFINAE = std::void_t` 这里的 `SFINAE` 的类型就是 `void`；当然了，这不重要，重要的是创造这样写的语境，能够方便我们进行 **`SFINAE`**。
-
-仅此一个示例，我相信就足够展示 `std::void_t` 的使用了。
-
-> *那么如果在 C++17 标准之前，没有 std::void_t ，我该如何要求类型有某些成员呢？*
-
-其实形式和原理都是一样的。
+其实也没啥，就是让我们能在一个模板形参中写多个SFINAE条件。在C++17前，实现起来的形式和原理都是一样的：
 
 ```cpp
-template<typename T,typename SFINAE = decltype(&T::f)>
-void f(T){}
+template <typename T,
+    typename _1 = decltype(T{} + T{}), // 要求有T::operator+(T)
+    typename _2 = typename T::type,    // 要求有T::type
+    typename _3 = decltype(&T::value), // 要求有T::value
+    typename _4 = decltype(&T::f)>     // 要求有T::f
+auto add(const T& t1, const T& t2) {
+    std::puts("+ | typename T::type | T::value");
+    return t1 + t2;
+}
 
 struct Test {
     void f()const{}
@@ -299,8 +281,6 @@ Test t;
 f(t);  // OK
 f(1);  // 未找到匹配的重载函数
 ```
-
-C++11 可用。
 
 ### `std::declval`
 
@@ -346,7 +326,7 @@ int main(){
 }
 ```
 
-错误的原因很简单，`decltype(T{} + T{})` 这个表达式中，同时**要求了 `T` 类型支持默认构造**（虽然这不是我们的本意），然而我们的 `X2` 类型没有默认构造，自然而然 `T{}` 不是合法表达式，*代换失败*。其实我们之前也有类似的写法，我们在本节进行纠正，使用 `std::declval`：
+错误的原因很简单，`decltype(T{} + T{})` 这个表达式中，同时**要求了 `T` 类型支持默认构造**（虽然这不是我们的本意，但不属于副作用），然而我们的 `X2` 类型没有默认构造，自然而然 `T{}` 不是合法表达式，*代换失败*。其实我们之前也有类似的写法，我们在本节进行纠正，使用 `std::declval`：
 
 ```cpp
 template<typename T, typename SFINAE = std::void_t<decltype(std::declval<T>() + std::declval<T>())> >
@@ -356,20 +336,18 @@ auto add(const T& t1, const T& t2) {
 }
 ```
 
-[测试](https://godbolt.org/z/7GGWvd5PM)。
-
 把 `T{}` 改成 `std::declval<T>()` 即可，decltype 是不求值语境，没有问题。
 
 ---
 
-还不止如此，使用它得以让我们先前的 `SFINAE` 检查类型是否有某些成员的形式得以改进，而不是像之前一样的  `decltype(&T::value), decltype(&T::f)` 的利用成员指针的形式。
+还不止如此，使用它得以让我们先前的 `SFINAE` 检查类型是否有某些成员的形式得以适用于函数重载的情况，而不是像之前一样的  `decltype(&T::value), decltype(&T::f)` 的利用成员指针的形式。
 
 ```cpp
 template<typename T,typename SFINAE = decltype(std::declval<T>().f(1))>
 void f(int) { std::puts("f int"); }
 
 template<typename T, typename SFINAE = decltype(std::declval<T>().f())>
-void f(double) { std::puts("f"); }
+void f(double) { std::puts("f double"); }
 
 struct X{
     void f()const{}
@@ -379,30 +357,23 @@ struct Y{
 };
 
 int main(){
-    f<X>(1);
-    f<Y>(1.1);
+    f<X>(1); // f double
+    f<Y>(1.1); // f int
 }
 ```
 
-[**运行结果**](https://godbolt.org/z/vvdWKKM5n)：
+显而易见，虽然我们的 `f<X>(1)` 传递的参数是 int 类型，但实际匹配到了参数为 `f(double)` 的版本，这是因为我们的 `f(int)` 版本的 `SFINAE` 约束要求了类型必须是支持 `f(1)` 这种形式，`X` 的成员函数 `f` 是空参的，自然不满足。
 
-```txt
-f
-f int
-```
-
-显而易见，虽然我们的 `f<X>(1)` 传递的参数是 int 类型，但是却打印了 `f`，也就是代表实际匹配到了参数为 `f(double)` 的版本，这是因为我们的 `f(int)` 版本的 `SFINAE` 约束要求了类型必须是支持 `f(1)` 这种形式，`X` 的成员函数 `f` 是空参的，自然不满足。
-
-**使用此种方式得以更加明确的约束，因为不管成员函数 f 的形参是什么情况，其成员指针表示形式都是：`&类名::f`。**
+**使用此种方式得以更加明确的约束函数签名，从而得以==支持函数重载==。因为不管成员函数 f 的形参是什么情况，其成员指针表示形式都是：`&类名::f`。**
 
 数据成员同样可以使用 `declval` 进行约束：
 
 ```cpp
 template<typename T, typename SFINAE = decltype(std::declval<T>().value)>
-void f(int) { std::puts("f value"); }
+void f(int) { std::puts("f int"); }
 
 template<typename T>
-void f(double) { std::puts("f"); }
+void f(double) { std::puts("f double"); }
 
 struct X {
     int value{};
@@ -410,16 +381,9 @@ struct X {
 struct Y {};
 
 int main() {
-    f<X>(1); // f value
-    f<Y>(1); // f
+    f<X>(1); // f int
+    f<Y>(1); // f double
 }
-```
-
-[**运行结果**](https://godbolt.org/z/c3ahK1WxP)：
-
-```txt
-f value
-f
 ```
 
 `f<Y>(1)`  虽然传递的参数是 int 类型，但是因为 `Y` 不满足 `SFINAE` 的约束，即没有成员 `value`，所以只能选择到 `f(double)` 的版本。
@@ -451,13 +415,7 @@ int main(){
 }
 ```
 
-## 总结
-
-到此，其实就足够了，SFINAE 的原理、使用、标准库支持（std::enable_if、std::void_t、std::declval）。
-
-虽然称不上全部，但如果你能完全理解明白本节的所有内容，那你一定超越了至少 95% C++ 开发者。其他的各种形式无非都是这样类似的，因为我们已经为你讲清楚了 ***原理***。
-
-- ***代换失败不是错误***。
+---
 
 [^1]: 注：“[重载决议](https://zh.cppreference.com/w/cpp/language/overload_resolution)”，简单来说，一个函数被重载，编译器必须决定要调用哪个重载，我们决定调用的是各形参与各实参之间的匹配最紧密的重载。
 

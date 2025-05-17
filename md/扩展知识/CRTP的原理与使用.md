@@ -1,166 +1,104 @@
 # CRTP 奇特重现模板模式
 
-它的范式基本上都是：父类是模板，再定义一个类类型继承它。因为类模板不是类，只有实例化后的类模板才是实际的类类型，所以我们需要实例化它，**显式指明模板类型参数，而这个类型参数就是我们定义的类型，也就是子类了**。
+## 背景：虚函数和动态绑定
+
+C++ 通过类的继承与虚函数的动态绑定，实现了动态多态。这种特性，使得我们能够用基类的指针/引用，访问子类的实例。
 
 ```cpp
-template <class Dervied>
-class Base {};
-
-class X : public Base<X> {};
+struct Base {
+    virtual void func() {}
+};
+struct Derived : Base {
+    virtual void func() override {}
+};
+Base *p = new Derived();
+p->func();
 ```
 
-这种范式是完全合法合理的，并无问题，首先不要对这种东西感到害怕或觉得非常神奇，也只不过是基本的语法规则所允许的。即使不使用 `CRTP` ，这些写法也是完全合理的，并无问题。
+在执行 `p->func()` 时，编译器生成的指令会检查 `p` 指向的实际类型（动态类型 `Derived` ），然后调用对应的 `func()` 。这个过程涉及到查询虚函数表，且 `p` 的动态类型是在运行时确定的，而非编译时确定，所以存在运行时开销。
 
----
+## 使用 CRTP 实现静态多态
 
-CRTP 可用于在父类暴露接口，而子类实现该接口，以此实现“***编译期多态***”，或称“***静态多态***”。 示例如下：
+为了在编译时绑定，我们就需要放弃虚函数机制，而只是在基类和子类中实现同名的普通函数；同时，为了在编译时确定类型，我们就需要将子类的名字在编译时提前传给基类。因此，我们需要用到 C++ 的模板，这个实现的套路叫做**奇异递归模板式（Curiously Recurring Template Pattern, CRTP）**。
 
-```cpp
-template <class Dervied>
-class Base {
-public:
-    // 公开的接口函数 供外部调用
-    void addWater(){
-        // 调用子类的实现函数。要求子类必须实现名为 impl() 的函数
-        // 这个函数会被调用来执行具体的操作
-        static_cast<Dervied*>(this)->impl();
-    }
-};
+CRTP的范式基本上都是有一个模板父类和任意子类：
 
-class X : public Base<X> {
-public:
-    // 子类实现了父类接口
-    void impl() const{
-        std::cout<< "X 设备加了 50 毫升水\n";
-    }
-};
-```
-
-使用方式也很简单，我们直接创建子类对象，调用 `addWater` 函数即可：
-
-```cpp
-X x;
-x.addWater();
-```
-
-> [运行](https://godbolt.org/z/o373avza5)测试。
-
-那么好，问题来了，**为什么呢？** `static_cast<Dervied*>(this)` 是做了什么，它为什么可以这样？
-
-- 很显然 `static_cast<Dervied*>(this)` 是进行了一个类型转换，将 `this` 指针（也就是**父类的指针**），转换为通过模板参数传递的类型，也就是**子类的指针**。
-- **这个转换是安全合法的**。因为 this 指针实际上指向一个 X 类型的对象，X 类型对象继承了 `Base<X>` 的部分，X 对象也就包含了 `Base<X>` 的部分，所以这个转换在编译期是有效的，并且是合法的。
-- 当你调用 `x.addWater()` 时，实际上是 X 对象调用了父类 `Base<X>` 的成员函数。这个成员函数内部使用 `static_cast<X*>(this)`，将 this 从 `Base<X>*` 转换为 `X*`，然后调用 X 中的 impl() 函数。这种转换是合法且安全的，且 X 确实实现了 impl() 函数。
-
-当然了，我们给出的示例是十分简单的，不过大多的使用的确也就是如此了，我们可以再优化一点，比如不让子类的接口暴露出来：
-
-```cpp
-template <class Dervied>
-class Base {
-public:
-    void addWater(){
-        static_cast<Dervied*>(this)->impl();
-    }
-};
-
-class X : public Base<X> {
-    // 设置友元，让父类得以访问
-    friend Base<X>;
-    // 私有接口，禁止外部访问
-    void impl() const{
-        std::cout<< "X 设备加了 50 毫升水\n";
-    }
-};
-```
-
-## 使用 CRTP 模式实现静态多态性并复用代码
-
-虚函数的价值在于，作为一个参数传入其他函数时 可以复用那个函数里的代码，而不需要在需求频繁变动与增加的时候一直修改。
-
-```cpp
-class BaseVirtual {
-public:
-    virtual void addWater(int amount) = 0; // 纯虚函数声明
-};
-
-class XVirtual : public BaseVirtual {
-public:
-    void addWater(int amount) override {
-        std::cout << "XVirtual 设备加了 " << amount << " 毫升水\n";
-    }
-};
-
-class YVirtual : public BaseVirtual {
-public:
-    void addWater(int amount) override {
-        std::cout << "YVirtual 设备加了 " << amount << " 毫升水\n";
-    }
-};
-
-// 接口，父类的引用
-void processWaterAdditionVirtual(BaseVirtual& r, int amount) {
-    if (amount > 0) {
-        r.addWater(amount);
-    } else {
-        std::cerr << "无效数量: " << amount << '\n'; // 错误处理
-    }
-}
-
-int main(){
-    XVirtual xVirtual;
-    YVirtual yVirtual;
-
-    processWaterAdditionVirtual(xVirtual, 50);
-    processWaterAdditionVirtual(yVirtual, 100);
-    processWaterAdditionVirtual(xVirtual, -10);
-}
-```
-
-> [运行](https://godbolt.org/z/Wjfx1TfMh)测试。
-
-**CRTP 同样可以，并且还是静态类型安全，这不成问题：**
+- 基类是一个模板类并以子类类型作为父类模板实参；
+- 因此子类的继承列表会类似于 `class Derived : public Base<Derived>`；
+- 基类定义要实现静态多态的函数，在其函数体中使用 `static_cast<>` 将基类的指针转为（模板）子类的指针，在编译期完成绑定。
 
 ```cpp
 template <typename Derived>
 class Base {
 public:
-    void addWater(int amount) {
-        static_cast<Derived*>(this)->impl_addWater(amount);
+    void func() {
+        static_cast<Derived*>(this)->funcImpl(); // 强制转换为子类类型，然后调用子类的函数（因为我们明确this的静态类型就是Derived参数对应的类型）
     }
 };
 
-class X : public Base<X> {
-friend Base<X>;
-    void impl_addWater(int amount) {
-        std::cout << "X 设备加了 " << amount << " 毫升水\n";
-    }
-};
-class Y : public Base<Y> {
-friend Base<Y>;
-    void impl_addWater(int amount) {
-        std::cout << "Y 设备加了 " << amount << " 毫升水\n";
-    }
+class SubClaz : public Base<SubClaz> { // 显式实例化了Base<SubClaz>类并作为SubClaz的基类
+friend class Base<SubClaz>;
+private:
+	void funcImpl() {}
+    // 可以想想这里继承得到了一个public: void Base<SubClaz>::func();
 };
 
-template <typename T>
-void processWaterAddition(Base<T>& r, int amount) {
-    if (amount > 0) {
-        r.addWater(amount);
-    } else {
-        std::cerr << "无效数量: " << amount << '\n';
-    }
-}
-
-int main() {
-    X x;
-    Y y;
-
-    processWaterAddition(x, 50);
-    processWaterAddition(y, 100);
-    processWaterAddition(x, -10);
-}
+SubClaz s;
+s.func();
 ```
 
-> [运行](https://godbolt.org/z/YoabKjMhh)测试。
+**注意**：由于模板实例化产生的是不相干的类，因此类似于使用 `std::vector<Base*>` 来存储CRTP子类的做法是行不通的，所以CRTP实际上是损失了一定的多态性的。
+
+不过这种多态性的损失可以简单地通过继承一个普通的基类实现（相当于这个非模板的基类会有多个平级的不同的子类，从将多态压缩到1层，不会出现多层的虚函数表查找）：
+
+```cpp
+#include <iostream>
+#include <vector>
+
+using std::cout;
+using std::vector;
+
+class Animal {
+public:
+    virtual void say() const = 0;
+    virtual ~Animal() = default;
+};
+
+template<typename T>
+class Animal_CRTP : public Animal {
+public:
+    void say() const override {
+        static_cast<const T *>(this)->say();
+    }
+};
+
+class Cat : public Animal_CRTP<Cat> {
+public:
+    void say() const {
+        cout << "Meow~ I'm a cat." << '\n';
+    }
+};
+
+class Dog : public Animal_CRTP<Dog> {
+public:
+    void say() const {
+        cout << "Wang~ I'm a dog." << '\n';
+    }
+};
+
+int main() {
+    vector<Animal *> zoo;
+    zoo.push_back(new Cat());
+    zoo.push_back(new Dog());
+    for ( vector<Animal *>::const_iterator iter{ zoo.begin() }; iter != zoo.end(); ++iter ) {
+        (*iter)->say();
+    }
+    for ( vector<Animal *>::iterator iter{ zoo.begin() }; iter != zoo.end(); ++iter ) {
+        delete (*iter);
+    }
+    return 0;
+}
+```
 
 ## C++23 的改动-显式对象形参
 
@@ -196,23 +134,3 @@ d2.name();
 `d.name` 也就是把 `d` 传入给父类模板成员函数 `name`，`auto&&` 被推导为 `D1&`，顾名思义”***显式***“对象形参，非常的简单直观。
 
 > [运行](https://godbolt.org/z/WW59PqEd3)测试。
-
-## CRTP 的好处
-
-上一节我们详细的介绍和解释了 CRTP 的编写范式和原理。现在我们来稍微介绍一下 CRTP 的众多好处。
-
-1. **静态多态**
-
-   CRTP 实现静态多态，无需使用虚函数，静态绑定，无运行时开销。
-2. **类型安全**
-
-   CRTP 提供了类型安全的多态性。通过模板参数传递具体的子类类型，编译器能够确保类型匹配，避免了传统向下转换可能引发的类型错误。
-3. **灵活的接口设计**
-
-   CRTP 允许父类定义公共接口，并要求子类实现具体的操作。这使得基类能够提供通用的接口，而具体的实现细节留给派生类。其实也就是说多态了。
-
-## 总结
-
-事实上笔者所见过的 `CRTP` 的用法也还不止如此，还有许多更加复杂，有趣的做法，不过就不想再探讨了，以上的内容已然足够。其它的做法也无非是基于以上了。
-
-各位可以尝试尽可能的将使用虚函数的代码改成 `CRTP` ，这其实在大多数时候并不构成难度，绝大多数的多态类型都能被很轻松的改成 `CRTP` 的形式。
