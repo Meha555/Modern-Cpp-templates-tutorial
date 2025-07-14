@@ -39,6 +39,7 @@ public:
 
 namespace Napi {
 
+// 注意类外实现都是inline的
 template <typename T> inline Reference<T> Reference<T>::New(const T &value, std::uint32_t initial) {
     // ...
 }
