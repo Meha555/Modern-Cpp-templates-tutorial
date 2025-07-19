@@ -6,15 +6,20 @@
 
 此特性被用于模板元编程。
 
-> 注意：**本节非常非常的重要，是模板基础中的基础，最为基本的特性和概念**。
+注：本章需要先看[09待决名](09待决名.md)
 
-## 模板形参的两次代换
+## 模板形参的两步代换（Two-phase substitution）
 
-对模板形参进行两次代换（由模板实参所替代）：
+> 不重要。
 
-- 在模板实参推导前，对显式指定的模板实参进行代换【就是显式实例化或者偏特化】
+对模板形参进行两步代换（由模板实参所替代）：
 
-- 在模板实参推导后，对推导出的实参和从默认项获得的实参进行替换【就是剩余的模板形参】
+- 在模板实参推导前，对显式 指定的模板实参进行代换【就是特化/偏特化的参数】
+- 在模板实参推导后，对隐式推导出的实参和默认实参进行替换
+
+> ”对显式指定的模板实参进行代换“这里的显式指定，就比如 `f<int>()` 就是显式指明了。我知道你肯定有疑问：我都显式指明了，那下面还推导啥？对，如果模板函数 `f` 只有一个模板形参，而你显式指明了，的确第二次代换没用，因为根本没啥好推导的。
+
+> 两次代换都有作用，是在于有多个模板形参，显式指定一些，又根据传入参数推导一些。
 
 代换的实参写出时非良构[^2]（并带有必要的诊断）的任何场合，都是*代换失败*。
 
@@ -22,7 +27,7 @@
 
 **SFINAE 代换失败**：在 函数类型 或其 模板形参类型 或其 `explicit` 说明符 (C++20 起)的*立即语境*中的类型与表达式中的失败。
 
-**硬错误**：在 代换后的类型/表达式 的*求值导致副作用（例如实例化某模板、生成某隐式定义的成员函数等）*，在这些副作用中如果产生了错误，则称作硬错误。
+**硬错误**：在 模板形参代换后的类型/表达式 的*求值导致副作用（例如实例化某模板、生成某隐式定义的成员函数等）*，在这些副作用中如果产生了错误，则称作硬错误。
 
 ```cpp
 template<typename A>
@@ -73,7 +78,9 @@ template<
 
 > 注意，你应当关注 `B<T>` 而非 `B<T>::type`，因为是直接在实例化模板 B 的时候就失败了，被当成硬错误；如果 `B<T>` 实例化成功，而没有 `::type`，则被当成**代换失败**（不过这里是不可能）。
 
-## 基础使用示例
+## 示例
+
+### 示例1
 
 我需要写一个函数模板 `add`，想要要求传入的对象必须是支持 `operator+` 的，应该怎么写？
 
@@ -106,6 +113,125 @@ auto add(const T& t1, const T& t2) -> decltype(t1 + t2){   // C++11 后置返回
 **即使不为了处理重载，使用 SFINAE 约束函数模板的传入类型，也是有很大好处的：报错、编译速度**。
 
 但是令人诟病的是 SFINAE 的写法在很多时候非常麻烦，目前各位可能还是没有感觉，后面的需求，写出的示例，慢慢的你就会感觉到了。这些问题会在下一章的[约束与概念](/md/第一部分-基础知识/11约束与概念.md)解决。
+
+### 示例2
+
+我现在想要检测一个类中是否有 `init` 成员函数：
+
+```cpp
+// (1) 错误版本
+typedef struct invalid_t {} invalid_t;
+template<typename T>
+struct HasInit {
+    static auto check(int) -> decltype(std::declval<T>().init(nullptr)); // 编译报错：B没有init函数
+    static invalid_t check(...);
+    static constexpr bool value = !std::is_same_v<decltype(check(int{0})), invalid_t>;
+};
+
+struct B {};
+int main() {
+    HasInit<B>::value; // 实例化失败
+}
+```
+
+这个版本，`check(int)` 和 `check()` 不是函数模板，从而在选择 `HasInit::check(int)` 后发现 `B` 没有 `init` 函数后由于不是函数模板根本就没有实参代换，无法发生SFINAE，于是直接硬错误。
+
+```cpp
+// (2) 正确版本
+template<typename T>
+struct HasInit {
+    template<typename U>
+    static auto check(int) -> decltype(std::declval<U>().init(nullptr));
+    template<typename U>
+    static invalid_t check(...);
+    static constexpr bool value = !std::is_same_v<decltype(check<T>(int{0})), invalid_t>;
+};
+```
+
+这个版本，`check(int)` 和 `check()` 都是函数模板，名字查找时发现 `B` 确实没有 `init` 函数后发生SFINAE，选择到 `check()` 。
+
+**注意**：上例中 `decltype` 中的 `check(int)` 和 `check<T>()` 都不是依赖名，因为在当前类中能直接看到形参匹配的 `check` 符号，所以名字查找在模板定义阶段就完成了。何况对于(1)来说 `check(int)` 连模板都不是。
+
+### 示例3
+
+```cpp
+// (1) 错误版本
+template<typename T>
+class Singleton {
+    //...
+    template <typename...Args>
+static typename std::enable_if<HasInit<T>::value, T&>::type Init(Args&&... args) {}
+    //...
+};
+struct C : public Singleton<C> {
+    void init(void *p) { std::cout << "C::init()" << std::endl; }
+};
+int main() {
+    // 我都不需要创建C对象，也不需要使用C::Init就能报错，因为C的继承列表中实例化了Singleton<C>
+}
+/*编译期报错：
+/home/insights/insights.cpp:25:36: error: failed requirement 'HasInit<C>::value'; 'enable_if' cannot be used to disable this declaration
+   25 |     static typename std::enable_if<HasInit<T>::value, T&>::type Init(Args&&... args) // Failed requirement 'HasInit<C>::value'; 'enable_if' cannot be used to disable this declaration
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/insights/insights.cpp:43:19: note: in instantiation of template class 'Singleton<C>' requested here
+   43 | struct C : public Singleton<C> {
+      |                   ^
+*/
+```
+
+为啥 `HasInit<T>::value` 结果是false？因为这里 `HasInit<T>` 不是当前实例化的成员，当前报错是在 `struct C : public Singleton<C>` 这里实例化 `Singleton<C>` ，而 `Init` 函数中的 `HasInit<T>::value` 根据 `T` 已经能代换进去算出值了，不过这里按道理不应该出现模板替换失败，C确实有init函数，因此 `std::enable_if_t<HasInit<C>::value, T&>` 就是 `std::enable_if_t<true, T&>` ，Copilot说这个是bug😵。
+
+```cpp
+// (2) 正确版本
+template<typename T>
+class Singleton {
+    //...
+    template <typename...Args, typename U = T>
+static typename std::enable_if_t<HasInit<U>::value, T&> Init(Args&&... args) {}
+    //...
+};
+```
+
+这里由于是 `HasInit<U>::value` 了，实例化 `Singleton` 时 `U` 未知，所以需要调用 `Init` 函数时才知道 `U` ，发生模板形参代换，从而能利用上SFINAE。
+
+总之就是要确保你想使用SFINAE的场景必须是要发生模板代换的场景，而不能是这种副作用场景。
+
+> 问的Copilot：
+>
+> Q：是不是因为在struct C : public Singleton<C>这里触发了Singleton的实例化,导致HasInit<T>::value变成HasInit<C>::value而被迫实例化;而注释掉的写法是HasInit<U>::value,而U只有在使用到init函数时才会被实例化,从而HasInit没有实例化
+>
+>
+> A：你的理解**非常正确**！
+>
+> ------
+>
+> ### 详细解释
+>
+> #### 1. **未注释写法（HasInit<T>::value）**
+>
+> *struct* C : *public* Singleton<C> { ... };
+>
+> - 这行代码会**实例化 Singleton**。
+> - 在实例化 Singleton 时，类体内的所有静态成员函数模板都会被声明（不是定义），但**所有静态成员的类型都要被检查**，包括 Init 的签名。
+> - Init 的签名里有 `std::enable_if<HasInit<T>::value, T&>::type`，此时 T 已经是 C，所以会**立即实例化 HasInit::value**。
+> - 这会导致 HasInit 的所有相关模板代码都被实例化、检查，这不符合SFINAE的预期使用方式。如果 C 没有 `init`，这里就会报错（不是SFINAE）。
+>
+> #### 2. **注释掉的写法（HasInit<U>::value）**
+>
+> // template <typename...Args, typename U = T>
+>
+> // static typename std::enable_if_t<HasInit<U>::value, T&> Init(Args&&... args)
+>
+> - 这里 U 是**函数模板的默认模板参数**，只有在你**调用 Init** 时，U 才会被推断/替换。
+> - 只有在你真正用到 Init 时，HasInit::value 才会被实例化和检查。
+> - 如果你没用到 Init，或者用到时 U 没有 `init`，SFINAE 会让这个重载被丢弃，不会报硬错误。
+>
+> ------
+>
+> ### 总结
+>
+> - **HasInit<T>::value**：在实例化 Singleton 时就会被实例化和检查，导致报错。
+> - **HasInit<U>::value**：只有在用到 Init 时才会被实例化和检查，SFINAE生效，不会报错。
 
 ## 标准库支持
 

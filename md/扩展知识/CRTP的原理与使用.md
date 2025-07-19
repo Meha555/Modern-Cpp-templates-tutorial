@@ -33,6 +33,8 @@ class Base {
 public:
     void func() {
         static_cast<Derived*>(this)->funcImpl(); // 强制转换为子类类型，然后调用子类的函数（因为我们明确this的静态类型就是Derived参数对应的类型）
+        // 用引用也是可以的
+        // static_cast<Derived&>(*this).funcImpl();
     }
 };
 
