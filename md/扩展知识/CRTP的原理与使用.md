@@ -27,6 +27,8 @@ CRTP的范式基本上都是有一个模板父类和任意子类：
 - 因此子类的继承列表会类似于 `class Derived : public Base<Derived>`；
 - 基类定义要实现静态多态的函数，在其函数体中使用 `static_cast<>` 将基类的指针转为（模板）子类的指针，在编译期完成绑定。
 
+此外，往往需要在子类中将基类设置为友元，从而能访问到未公开的函数。
+
 ```cpp
 template <typename Derived>
 class Base {
@@ -39,7 +41,7 @@ public:
 };
 
 class SubClaz : public Base<SubClaz> { // 显式实例化了Base<SubClaz>类并作为SubClaz的基类
-friend class Base<SubClaz>;
+friend class Base<SubClaz>; // 确保基类Base<SubClaz>可以看到这里私有的funcImpl()
 private:
 	void funcImpl() {}
     // 可以想想这里继承得到了一个public: void Base<SubClaz>::func();
@@ -49,9 +51,13 @@ SubClaz s;
 s.func();
 ```
 
-**注意**：由于模板实例化产生的是不相干的类，因此类似于使用 `std::vector<Base*>` 来存储CRTP子类的做法是行不通的，所以CRTP实际上是损失了一定的多态性的。
+### 扩展实现
 
-不过这种多态性的损失可以简单地通过继承一个普通的基类实现（相当于这个非模板的基类会有多个平级的不同的子类，从将多态压缩到1层，不会出现多层的虚函数表查找）：
+#### 额外提供一个抽象基类
+
+由于模板实例化产生的是不相干的类，因此类似于使用 `std::vector<Base*>` 来存储CRTP子类的做法是行不通的，所以CRTP实际上是损失了一定的多态性的。
+
+不过这种多态性的损失可以简单地通过继承一个普通的基类实现（相当于这个非模板的基类会有多个平级的不同的子类，从将多态压缩到1层，不会出现多层的虚函数表查找，所以性能仍然有保障）。注意这种做法也可以用于将CRTP模板的”虚方法“转换为真正的虚方法，使其可以提供默认实现。
 
 ```cpp
 #include <iostream>
@@ -62,28 +68,28 @@ using std::vector;
 
 class Animal {
 public:
-    virtual void say() const = 0;
+    virtual void say() const = 0; // 虚函数
     virtual ~Animal() = default;
 };
 
 template<typename T>
 class Animal_CRTP : public Animal {
 public:
-    void say() const override {
+    void say() const override { // CRTP模板基类重写虚函数（注意此时say()是一个虚函数）
         static_cast<const T *>(this)->say();
     }
 };
 
 class Cat : public Animal_CRTP<Cat> {
 public:
-    void say() const {
+    void say() const { // 注意此时say()是一个虚函数
         cout << "Meow~ I'm a cat." << '\n';
     }
 };
 
 class Dog : public Animal_CRTP<Dog> {
 public:
-    void say() const {
+    void say() const { // 注意此时say()是一个虚函数
         cout << "Wang~ I'm a dog." << '\n';
     }
 };
@@ -102,6 +108,76 @@ int main() {
 }
 ```
 
+#### 为CRTP”虚方法“提供默认实现
+
+除了使用“额外提供一个抽象基类”的方式将CRTP”虚方法“转化为真正的虚方法来提供默认实现，还可以利用SFINAE来选择合适的实现版本：
+
+```cpp
+#include <type_traits>
+#include <iostream>
+
+// 定义辅助traits：检测Derived是否有funcImpl()方法
+template <typename Derived>
+struct has_func_impl {
+private:
+    // 尝试调用Derived::funcImpl()，若存在则匹配此重载（返回std::true_type）
+    template <typename T>
+    static auto check(int) -> decltype(std::declval<T>().funcImpl(), std::true_type{});
+    // 若不存在，则匹配此重载（返回std::false_type）
+    template <typename T>
+    static std::false_type check(...);
+public:
+    // 最终结果：true表示Derived有funcImpl()，false则无
+    static constexpr bool value = decltype(check<Derived>(int{0}))::value;
+};
+
+// CRTP基类：提供默认实现
+template <typename Derived>
+class Base {
+public:
+    // 对外接口：统一调用入口
+    void func() {
+        // 根据派生类是否有funcImpl()，选择不同实现
+        funcImplDispatch(std::integral_constant<bool, has_func_impl<Derived>::value>{});
+    }
+
+private:
+    void defaultFuncImpl() {
+        std::cout << "Base::defaultFuncImpl (默认实现)\n";
+    }
+
+    void funcImplDispatch(std::true_type) {
+        static_cast<Derived*>(this)->funcImpl();
+    }
+    void funcImplDispatch(std::false_type) {
+        defaultFuncImpl();
+    }
+};
+
+// 派生类A：实现了funcImpl()，使用自己的逻辑
+class DerivedA : public Base<DerivedA> {
+friend class Base<DerivedA>; // 允许基类访问private的funcImpl()
+friend class has_func_impl<DerivedA>; // 允许has_func_impl访问private的funcImpl()
+private:
+    void funcImpl() {
+        std::cout << "DerivedA::funcImpl (自定义实现)\n";
+    }
+};
+
+// 派生类B：未实现funcImpl()，使用基类默认实现
+class DerivedB : public Base<DerivedB> {
+};
+
+int main() {
+    DerivedA a;
+    a.func(); // 输出：DerivedA::funcImpl (自定义实现)
+
+    DerivedB b;
+    b.func(); // 输出：Base::defaultFuncImpl (默认实现)
+    return 0;
+}
+```
+
 ## C++23 的改动-显式对象形参
 
 C++23 引入了**显式对象形参**，让我们的 `CRTP` 的形式也出现了变化：
@@ -110,7 +186,7 @@ C++23 引入了**显式对象形参**，让我们的 `CRTP` 的形式也出现�
 >
 > ```cpp
 > struct X{
->     void f(this const X& self){}
+>  void f(this const X& self){}
 > };
 > ```
 >
