@@ -10,11 +10,9 @@
 
 ## 模板形参的两步代换（Two-phase substitution）
 
-> 不重要。
-
 对模板形参进行两步代换（由模板实参所替代）：
 
-- 在模板实参推导前，对显式 指定的模板实参进行代换【就是特化/偏特化的参数】
+- 在模板实参推导前，对显式指定的模板实参进行代换【就是特化/偏特化的参数】
 - 在模板实参推导后，对隐式推导出的实参和默认实参进行替换
 
 > ”对显式指定的模板实参进行代换“这里的显式指定，就比如 `f<int>()` 就是显式指明了。我知道你肯定有疑问：我都显式指明了，那下面还推导啥？对，如果模板函数 `f` 只有一个模板形参，而你显式指明了，的确第二次代换没用，因为根本没啥好推导的。
@@ -23,11 +21,41 @@
 
 代换的实参写出时非良构[^2]（并带有必要的诊断）的任何场合，都是*代换失败*。
 
-## 代换失败与硬错误
+## 代换失败与硬错误，以及SFINAE
 
-**SFINAE 代换失败**：在 函数类型 或其 模板形参类型 或其 `explicit` 说明符 (C++20 起)的*立即语境*中的类型与表达式中的失败。
+> https://en.cppreference.com/w/cpp/language/sfinae.html
 
-**硬错误**：在 模板形参代换后的类型/表达式 的*求值导致副作用（例如实例化某模板、生成某隐式定义的成员函数等）*，在这些副作用中如果产生了错误，则称作硬错误。
+### 几个概念
+
+**立即上下文（*immediate context*）**：SFINAE 语境中用来判断类型代换失败是否会被当作“静默丢弃重载”处理的那部分代码。包括会形成函数模板“类型/签名”的代码：函数的参数类型、返回类型、异常/`noexcept` 规格、**以及依赖于该模板的模板参数的非类型/类型模板形参**等。
+
+- 这里解释一下“依赖于该函数模板的模板参数的非类型/类型模板形参”：
+
+  ```cpp
+  // In class ArrayProxy<T>
+  template <typename B = T, typename std::enable_if<std::is_const<B>::value, int>::type = 0>
+  ArrayProxy( std::initializer_list<typename std::remove_const<T>::type> const & list );
+  ```
+
+  这里 `B` 就是依赖外层模板参数 `T` 的类型模板形参。这里 `B` 如果发生了代换错误，即 `enable_if` 没过，则属于立即上下文中的错误，不会被视作硬错误。
+  
+- 为啥要被叫做“立即上下文”？<u>这个术语想表达的是“仅限”当前实例化的模板的一个范围</u>。如果超出这个范围，必然引发其他模板元的实例化，就不仅仅是“当前实例化的模板了”，即有副作用了。
+
+**代换失败**：出现在 函数类型 或其 模板形参类型 或其 `explicit` 说明符 (C++20 起) 的**立即上下文**中失败。
+
+**硬错误（*hard error*）**：在 模板形参代换后的类型/表达式 的*求值导致副作用（例如实例化某模板、生成某隐式定义的成员函数等）*，在这些副作用中如果产生了错误，则称作硬错误。（就是立即上下文之外出现的代换失败）。
+
+综上所述，SFINAE（Substitution Failure Is Not An Error）语境就是规定了立即上下文中的类型代换失败叫做代换失败，不会让编译器立即报错，而是继续尝试决议其他模板重载来代换。而发生在立即上下文之外的类型代换失败则称之为硬错误，会直接让编译就地失败报错。所以立即上下文就是可以使用 SFINAE 技法的语境！
+
+>回顾刚才的示例，如果我换成下面这个，则就不是 SFINAE 了。因为 `T` 如果在 `enable_if` 中代换失败，则是硬错误（因为 `T` 是整个当前类模板 `ArrayProxy<T>` 的模板参数，会实例化 `ArrayProxy<T>` ，代换失败影响的范围超过了当前实例化的成员函数模板 `ArrayProxy` ，所以不是在立即上下文内）：
+>
+>```cpp
+>// In class ArrayProxy<T>
+>template <typename std::enable_if<std::is_const<T>::value, int>::type = 0>
+>ArrayProxy( std::initializer_list<typename std::remove_const<T>::type> const & list );
+>```
+
+### SFINAE 示例
 
 ```cpp
 template<typename A>
@@ -36,7 +64,7 @@ struct B { using type = typename A::type; }; // 待决名，C++20 之前必须�
 template<
     class T,
     class U = typename T::type,              // 如果 T 没有成员 type 那么就是 SFINAE 失败（代换失败）
-    class V = typename B<T>::type>           // 如果 T 没有成员 type 那么就是硬错误 不过标准保证这里不会发生硬错误，因为到 U 的默认模板实参中的代换会首先失败
+    class V = typename B<T>::type>           // 如果 T 没有成员 type 那么就是硬错误 不过标准保证这里不会发生硬错误，因为到 U 的默认模板实参中的代换会首先失败【SFINAE的处理是按照你写的顺序来的】
 void foo(int) { std::puts("SFINAE T::type B<T>::type"); }
 
 template<typename T>
@@ -68,7 +96,7 @@ template<
 
 > 代换的实参写出时非良构（并带有必要的诊断）的任何场合，都是代换失败。
 
-所以这是一个代换失败，但是因为“*代换失败不是错误*”，只是从“*重载集中丢弃这个特化，而不会导致编译失败*”，然后就就去尝试匹配下一个版本 `void foo(double)` 了，`1` 是 int 类型，隐式转换到 double，没什么问题。
+所以这是一个代换失败，但是因为“*代换失败不是错误*”，只是从“*重载集中丢弃（discard）这个特化，而不会导致编译失败*”，然后就就去尝试匹配下一个版本 `void foo(double)` 了，`1` 是 int 类型，隐式转换到 double，没什么问题。
 
 至于其中提到的*硬错误*？为啥它是硬错误？其实最开始的概念已经说了：
 
@@ -88,7 +116,7 @@ template<
 
 ```cpp
 template<typename T>
-auto add(const T& t1, const T& t2) -> decltype(t1 + t2){   // C++11 后置返回类型，在返回类型中运用 SFINAE
+auto add(const T& t1, const T& t2) -> decltype(t1 + t2){   // C++11 后置返回类型，在返回类型（属于立即上下文）中运用 SFINAE
     std::puts("SFINAE +");
     return t1 + t2;
 }
@@ -107,7 +135,7 @@ auto add(const T& t1, const T& t2) -> decltype(t1 + t2){   // C++11 后置返回
 
 这里的重点是**能不要实例化就不要实例化，因为模板实例化会拖慢编译时间**。
 
-我们当前的示例的 `add` 函数模板非常的简单，虽然编译器可以用到 `operator+()` 的 `return t1 + t2` 这句报错告诉你是因为没有 `operator+` ，但是很多模板是非常复杂的，编译器实例化模板经常会产生一些完全不可读的报错；如果我们使用 SFINAE，编译器就是直接告诉我：“未找到匹配的重载函数”，而根本没有进行模板实例化，那我们就看 SFINAE 中哪些 Traits 没有满足即可，通常只需要按顺序一个个排查就行。
+我们当前的示例的 `add` 函数模板非常的简单，虽然编译器可以用到 `operator+()` 的 `return t1 + t2` 这句报错告诉你是因为没有 `operator+` ，但是很多模板是非常复杂的，编译器实例化模板经常会产生一些完全不可读的报错；<u>如果我们使用 SFINAE，编译器就是直接告诉我：“未找到匹配的重载函数”，而根本没有进行模板实例化，那我们就看 SFINAE 中哪些 Traits 没有满足即可，通常只需要按顺序一个个排查就行</u>。
 
 总而言之：
 **即使不为了处理重载，使用 SFINAE 约束函数模板的传入类型，也是有很大好处的：报错、编译速度**。
@@ -386,7 +414,7 @@ add(t, t2);  // OK
 
 > 那么这里 `std::void_t` 的作用是？
 
-其实也没啥，就是让我们能在一个模板形参中写多个SFINAE条件。在C++17前，实现起来的形式和原理都是一样的：
+其实也没啥，就是让我们能在一个模板形参中写多个SFINAE条件（用 `decltype` 也一样的）。在C++17前，实现起来的形式和原理都是一样的：
 
 ```cpp
 template <typename T,
@@ -408,7 +436,7 @@ f(t);  // OK
 f(1);  // 未找到匹配的重载函数
 ```
 
-### `std::declval`
+### `std::declval` 配合 `decltype`
 
 ```cpp
 template<class T>
@@ -417,7 +445,7 @@ typename std::add_rvalue_reference<T>::type declval() noexcept;
 
 将任意类型 T 转换成引用类型，*使得在 decltype 说明符的操作数中不必经过构造函数就能使用成员函数*。
 
-- [std::declval](https://zh.cppreference.com/w/cpp/utility/declval) 只能用于 **[不求值语境](https://zh.cppreference.com/w/cpp/language/expressions#.E6.BD.9C.E5.9C.A8.E6.B1.82.E5.80.BC.E8.A1.A8.E8.BE.BE.E5.BC.8F)**，且不要求有定义。
+- **[std::declval](https://zh.cppreference.com/w/cpp/utility/declval) 只能用于 [不求值语境](https://zh.cppreference.com/w/cpp/language/expressions#.E6.BD.9C.E5.9C.A8.E6.B1.82.E5.80.BC.E8.A1.A8.E8.BE.BE.E5.BC.8F)，且不要求有定义（即允许不完全类型）。而 `decltype` 正好提供的就是不求值语境**，两者一起用有奇效。
 
 - **它不能被实际调用，因此不会返回值，返回类型是 `T&&`**。
 
@@ -540,6 +568,71 @@ int main(){
     X<Test2>::f();      // 主模板
 }
 ```
+
+## 书写 SFINAE 的套路
+
+主要有2种套路：同一种目的，2种风格。套路总结就是3步：
+
+1. 构造一个模板参数代换的语境（即立即上下文）；
+2. 提供一个代换失败后要回退的基本版本（如果你希望代换失败就出错，那就不要提供这个基本版本）；
+3. 提供一个包含你需要的条件（traits）的代换成功的版本。
+
+另外，注意可以**利用 `decltype` 和 `std::void_t` 来构造一个类型代换语境**，**利用逗号表达式或 `std::void_t` 来把多个类型代换表达式拼起来**。其中逗号表达式用于需要一个值的场景如 `std::enable_if` ，而 `std::void_t` 用于需要一个类型的场景。
+
+假设我现在想写一个判断一个类型 `T` 是否可以进行迭代：
+
+### 风格1
+
+```cpp
+// 基本模板，默认为false_type
+template <typename T, typename SFINAE = void>
+struct is_iterable : public std::false_type {};
+
+// 特化版本，检查类型T是否有begin()和end()方法
+template <typename T>
+struct is_iterable<T, typename SFINAE = std::enable_if_t<
+    std::is_same_v<
+        decltype(std::declval<T>().begin()),
+        decltype(std::declval<T>().end())
+    >,
+void>> : public std::true_type {};
+
+// 更简单的实现版本（使用std::void_t）
+template <typename T>
+struct is_iterable<T, typename SFINAE = std::void_t<
+    decltype(std::declval<T>().begin()),
+    decltype(std::declval<T>().end())
+>> : public std::true_type {};
+```
+
+注意：
+- 由于我们是通过两个类模板实现的，立即上下文就是当前这个类模板，所以可以直接使用 `T` 作为 SFINAE 类型代换中的检查条件；
+- 上面用了 `std::void_t` ，会导致所有 `SFINAE` 模板参数都推断为 `void` 。那么为啥不会选择到继承自 `std::false_type` 的基本模板呢？因为当有更特化的那个时，选择更特化的那个。
+
+### 风格2
+
+```cpp
+template <typename T> struct is_iterable {
+private:
+    // 基本模板，默认为false_type
+    template <typename SFINAE>
+    static std::false_type check(...);
+
+    // 特化版本，检查类型T是否有begin()和end()方法
+    template <typename SFINAE>
+    static auto check(int) -> decltype(std::declval<SFINAE>().begin(),
+                                       std::declval<SFINAE>().end(),
+                                       std::true_type{});
+
+public:
+    // 显式先重载决议特化版本，这样代换失败就能回退到基本模板。而不是一上来就基本模板。
+    static constexpr bool value = decltype(check<T>(int{0}))::value;
+};
+```
+
+注意：
+- 由于我们是通过以 `T` 作为模板参数的类模板的成员函数来实现的，所以这里 `T` 不在当前类型代换要实例化的成员函数的立即上下文中，不能用 `T` 进行代换，所以单独搞了一个位于当前立即上下文的模板参数 `SFINAE` 来实现 SFINAE；
+- 这里利用了逗号表达式是从左往右计算，最终返回值是最后一个表达式的返回值的特性。
 
 ---
 
