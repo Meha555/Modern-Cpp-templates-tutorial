@@ -272,7 +272,7 @@ static typename std::enable_if_t<HasInit<U>::value, T&> Init(Args&&... args) {}
 ```cpp
 template<bool B, class T = void>
 struct enable_if {};
- 
+
 template<class T> // 类模板偏特化
 struct enable_if<true, T> { typedef T type; };     // 只有 B 为 true，才有 type，即 ::type 才合法
 
@@ -283,8 +283,7 @@ using enable_if_t = typename enable_if<B,T>::type; // C++14 引入
 这是一个模板类，在 C++11 引入，它的用法很简单，就是第一个模板参数为 true，此模板类就有 `type = T`，不然就没有，以此进行 SFINAE。
 
 ```cpp
-template<typename T,typename SFINAE = 
-    std::enable_if_t<std::is_same_v<T,int>>>
+template<typename T,typename SFINAE = std::enable_if_t<std::is_same_v<T,int>>>
 void f(T){}
 ```
 
@@ -310,17 +309,17 @@ using enable_if_t = typename enable_if<false,void>::type; // void 是默认模�
 
 ```cpp
 template<typename T,
-    std::enable_if_t<std::is_same_v<T,int>,int> =0>
+    std::enable_if_t<std::is_same_v<T,int>,int> = 0>
 void f(T){}
 ```
 
 它的作用和之前的写法是一样的，但这个写法的原理是什么呢？我们可以逐步解析：
 
 ```cpp
-std::enable_if_t<std::is_same_v<T,int>,int> =0
+std::enable_if_t<std::is_same_v<T,int>,int> = 0
 ```
 
-这里的 `=0` 实际上是对前面 `enable_if_t` 表达式的默认实参，它起到的是无名默认实参的作用。也就是说，如果 `std::is_same_v<T,int>` 为 true，那么 `std::enable_if_t<true,int>` 变为：
+这里的 `= 0` 实际上是对前面 `enable_if_t` 表达式的默认实参，它起到的是无名默认实参的作用。也就是说，如果 `std::is_same_v<T,int>` 为 true，那么 `std::enable_if_t<true,int>` 变为：
 
 ```cpp
 using enable_if_t = typename enable_if<true,int>::type;
@@ -328,8 +327,7 @@ using enable_if_t = typename enable_if<true,int>::type;
 
 `true` 会选择 enable_if 的偏特化，从而**有 `type` 别名**，它的类型就是是我们传入的第二个参数 `int`。因此，**`std::enable_if_t<true,int>` 实际上就是 int**。
 
-当然，如果 `std::is_same_v<T,int>` 为 `false`，则 `std::enable_if_t<false,int>` 会导致**代换失败**。
-不过因为“代换失败不是错误”，所以只是不选择函数模板 `f`，而不会导致编译错误。（当然了，如果没有一个符合条件的重载，那还是会报编译错误的：“*未找到匹配的重载函数*”）。
+当然，如果 `std::is_same_v<T,int>` 为 `false`，则 `std::enable_if_t<false,int>` 会导致**代换失败**。而由于当前立即上下文是在实例化函数模板 `f` ，所以“代换失败不是错误”，所以只是不选择函数模板 `f`，而不会导致硬错误。（当然了，如果没有一个符合条件的重载，那还是会报编译错误的：“*未找到匹配的重载函数*”）。
 
 ---
 
