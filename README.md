@@ -23,3 +23,7 @@
 &emsp;&emsp;虽强调现代 C++，但同时对于老式模板写法也都会进行提及和教学。**因为不体会老式语法和写法的折磨，没有办法理解新特性的价值与意义**。
 
 请确保您的编译器至少支持 C++20，优先使用 gcc13，clang16，msvc v19.latest。所有代码均测试三大编译器。
+
+---
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Mq-b/Modern-Cpp-templates-tutorial&type=date&legend=top-left)](https://www.star-history.com/#Mq-b/Modern-Cpp-templates-tutorial&type=date&legend=top-left)
