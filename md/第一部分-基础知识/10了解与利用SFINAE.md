@@ -357,6 +357,79 @@ array(T t, Args...) -> array<T, sizeof...(Args) + 1>;
 ::array arr2{1, 2.3, 3.4, 4.5, 5.6}; // 被推导为 array<int,5>    有数据截断
 ```
 
+#### `std::enable_if` 与重载
+
+**`std::enable_if` 作为返回类型只能用于函数模板重载，而不能用于类模板重载**。
+
+##### `std::enable_if` 在函数模板重载中合法
+
+```cpp
+// 重载1：仅当 T 是整数类型时启用
+template<typename T>
+typename std::enable_if<std::is_integral<T>::value, void>::type
+foo(T x) {
+    std::cout << "Integral: " << x << "\n";
+}
+
+// 重载2：仅当 T 是浮点类型时启用
+template<typename T>
+typename std::enable_if<std::is_floating_point<T>::value, void>::type
+foo(T x) {
+    std::cout << "Floating: " << x << "\n";
+}
+```
+
+`std::enable_if` 是函数签名的一部分，所以实例化函数时就能实例化 `std::enable_if` ，进而区分出两者（实际上是发生代换失败而丢弃代换失败的版本）。
+
+##### `std::enable_if` 不能用于区分类模板定义
+
+```cpp
+// 主模板1：试图处理非指针
+template<typename T>
+struct MyTrait {
+    static typename std::enable_if<!std::is_pointer<T>::value, T>::type get() {
+        return T{};
+    }
+};
+
+// 主模板2：试图处理指针
+template<typename T>
+struct MyTrait {  // 报错：redefinition of 'MyTrait'
+    static typename std::enable_if<std::is_pointer<T>::value, T>::type get() {
+        return nullptr;
+    }
+};
+```
+
+这是因为：
+
+- 类模板的 **主模板（primary template）只能定义一次**。
+- 即使两个定义的内部用了 `std::enable_if`，但是它们的 **类模板签名完全相同**：都是 `template<typename T> struct MyTrait`。而编译器在解析时，由于实例化 `MyTrait` 时看不到 `std::enable_if` ，所以它在看到第二个 `MyTrait` 定义时就认为你重复定义了同一个模板。
+
+---
+
+那么，**如果需要实现类模板的条件分支，应当使用偏特化**：
+
+```cpp
+// 主模板：通过第二个参数控制偏特化
+template<typename T, typename SFINAE = void>
+struct MyTrait;
+
+// 偏特化1：非指针类型
+template<typename T>
+struct MyTrait<T, typename std::enable_if<!std::is_pointer<T>::value>::type> {
+    static T get() { return T{}; }
+};
+
+// 偏特化2：指针类型
+template<typename T>
+struct MyTrait<T, typename std::enable_if<std::is_pointer<T>::value>::type> {
+    static T get() { return nullptr; }
+};
+```
+
+因为这样通过模板偏特化实现的，是将 `std::enable_if` 加入到了类模板实例化后的签名中，这样编译器就能区分这些 `MyTrait` 了。
+
 ### `std::void_t`
 
 ```cpp
